@@ -1,32 +1,66 @@
 package com.example.openslmserver
 
-import androidx.appcompat.app.AppCompatActivity
 import android.os.Bundle
-import android.widget.TextView
+import androidx.appcompat.app.AppCompatActivity
 import com.example.openslmserver.databinding.ActivityMainBinding
+import java.net.InetAddress
+import java.net.NetworkInterface
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
+    private var server: KtorServer? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        // Example of a call to a native method
-        binding.sampleText.text = stringFromJNI()
+        val ipAddress = getLocalIpAddress() ?: "Unknown"
+        binding.sampleText.text = "Server IP: $ipAddress\nPort: 8080\nStatus: Initializing..."
+
+        server = KtorServer { log ->
+            runOnUiThread {
+                binding.sampleText.text = "${binding.sampleText.text}\n$log"
+            }
+        }
+
+        binding.root.postDelayed({
+            server?.start(8080)
+            runOnUiThread {
+                val currentText = binding.sampleText.text.toString()
+                binding.sampleText.text = currentText.replace("Initializing...", "Running")
+            }
+        }, 1000)
     }
 
-    /**
-     * A native method that is implemented by the 'openslmserver' native library,
-     * which is packaged with this application.
-     */
+    override fun onDestroy() {
+        super.onDestroy()
+        server?.stop()
+    }
+
+    private fun getLocalIpAddress(): String? {
+        try {
+            val interfaces = NetworkInterface.getNetworkInterfaces()
+            while (interfaces.hasMoreElements()) {
+                val networkInterface = interfaces.nextElement()
+                val addresses = networkInterface.inetAddresses
+                while (addresses.hasMoreElements()) {
+                    val address = addresses.nextElement()
+                    if (!address.isLoopbackAddress && address is InetAddress && address.hostAddress.contains(".")) {
+                        return address.hostAddress
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        return null
+    }
+
     external fun stringFromJNI(): String
 
     companion object {
-        // Used to load the 'openslmserver' library on application startup.
         init {
             System.loadLibrary("openslmserver")
         }
