@@ -45,8 +45,9 @@ curl -fsS "$BASE_URL/v1/chat/completions" \
 ```
 
 - `GET /` returns the server status. `GET /v1/models` returns the ID of the active model.
-- `POST /v1/chat/completions` accepts text messages and returns generated text in `choices[0].message.content`. Omit `model` or use the ID returned by the model listing. Keep `max_tokens` within the app's output limit.
-- The API currently returns a single JSON response. Include earlier messages in each request for conversation history, and end the message list with a `user` turn.
+- `POST /v1/chat/completions` returns JSON by default. Set `"stream": true` for SSE with `chat.completion.chunk` events and a final `[DONE]` marker. Use `-N` with curl to see events as they arrive.
+- Omit `model` or use the ID returned by the model listing. `max_tokens` is clamped between 1 and the app's output limit. Message `content` accepts strings or arrays of `{"type":"text","text":"…"}` parts. Leading `system` and `developer` messages supply instructions.
+- Send function definitions in `tools`. When the model requests a function, `finish_reason` is `tool_calls`, with the calls in JSON `message.tool_calls` or SSE `delta.tool_calls`. The client runs the functions and sends the conversation history, the assistant's call message, and one `tool` message with the matching `tool_call_id` for each result. SSE requests that enable tools buffer model output to detect function calls before sending it.
 
 ## Build from source
 

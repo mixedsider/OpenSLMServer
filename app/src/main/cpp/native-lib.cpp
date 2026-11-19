@@ -23,9 +23,31 @@ std::string readBytes(JNIEnv *env, jbyteArray bytes) {
     return result;
 }
 
-jbyteArray fail(JNIEnv *env, const char *message, const char *type = "java/lang/IllegalStateException") {
+void fail(JNIEnv *env, const char *message, const char *type = "java/lang/IllegalStateException") {
     env->ThrowNew(env->FindClass(type), message);
-    return nullptr;
+}
+
+// A token can end in the middle of a UTF-8 character. Keep that suffix for the next token.
+size_t completeUtf8Prefix(const std::string &bytes) {
+    if (bytes.empty()) return 0;
+    size_t start = bytes.size() - 1;
+    while (start > 0 && (static_cast<unsigned char>(bytes[start]) & 0xc0) == 0x80) --start;
+    const auto lead = static_cast<unsigned char>(bytes[start]);
+    size_t length = 1;
+    if (lead >= 0xc2 && lead <= 0xdf) length = 2;
+    if (lead >= 0xe0 && lead <= 0xef) length = 3;
+    if (lead >= 0xf0 && lead <= 0xf4) length = 4;
+    return bytes.size() - start < length ? start : bytes.size();
+}
+
+bool emit(JNIEnv *env, jobject output, jmethodID onBytes, const std::string &bytes, size_t size) {
+    if (size == 0) return true;
+    auto chunk = env->NewByteArray(size);
+    if (!chunk) return false;
+    env->SetByteArrayRegion(chunk, 0, size, reinterpret_cast<const jbyte *>(bytes.data()));
+    const bool keepGoing = !env->ExceptionCheck() && env->CallBooleanMethod(output, onBytes, chunk);
+    env->DeleteLocalRef(chunk);
+    return keepGoing && !env->ExceptionCheck();
 }
 }
 
@@ -53,10 +75,10 @@ Java_com_example_openslmserver_LlamaNative_initContext(
     return reinterpret_cast<jlong>(holder.release());
 }
 
-extern "C" JNIEXPORT jbyteArray JNICALL
-Java_com_example_openslmserver_LlamaNative_completion(
+extern "C" JNIEXPORT void JNICALL
+Java_com_example_openslmserver_LlamaNative_streamCompletion(
         JNIEnv *env, jobject, jlong contextPtr, jobjectArray roles, jobjectArray messages,
-        jint maxTokens) {
+        jint maxTokens, jobject output) {
     const auto *holder = reinterpret_cast<LlamaContext *>(contextPtr);
     if (!holder) return fail(env, "Model is not initialized");
     auto *context = holder->context;
@@ -68,7 +90,7 @@ Java_com_example_openslmserver_LlamaNative_completion(
         auto role = static_cast<jstring>(env->GetObjectArrayElement(roles, i));
         auto message = static_cast<jbyteArray>(env->GetObjectArrayElement(messages, i));
         const char *roleChars = env->GetStringUTFChars(role, nullptr);
-        if (!roleChars) return nullptr;
+        if (!roleChars) return;
         roleText[i] = roleChars;
         env->ReleaseStringUTFChars(role, roleChars);
         messageText[i] = readBytes(env, message);
@@ -111,7 +133,9 @@ Java_com_example_openslmserver_LlamaNative_completion(
             sampler(llama_sampler_init_greedy(), llama_sampler_free);
     if (!sampler) return fail(env, "Could not create sampler");
 
-    std::string response;
+    const auto onBytes = env->GetMethodID(env->GetObjectClass(output), "onBytes", "([B)Z");
+    if (!onBytes) return;
+    std::string pending;
     std::vector<char> piece(256);
     const int limit = std::min(maxTokens, static_cast<int>(llama_n_ctx(context)) - inputTokens);
     for (int i = 0; i < limit; ++i) {
@@ -123,15 +147,15 @@ Java_com_example_openslmserver_LlamaNative_completion(
             size = llama_token_to_piece(vocab, token, piece.data(), piece.size(), 0, false);
         }
         if (size < 0) return fail(env, "Could not decode generated token");
-        response.append(piece.data(), size);
+        pending.append(piece.data(), size);
+        const size_t complete = completeUtf8Prefix(pending);
+        if (!emit(env, output, onBytes, pending, complete)) return;
+        pending.erase(0, complete);
         if (i + 1 < limit && llama_decode(context, llama_batch_get_one(&token, 1)) != 0) {
             return fail(env, "Could not evaluate generated token");
         }
     }
-    auto output = env->NewByteArray(response.size());
-    if (output) env->SetByteArrayRegion(output, 0, response.size(),
-                                         reinterpret_cast<const jbyte *>(response.data()));
-    return output;
+    emit(env, output, onBytes, pending, pending.size());
 }
 
 extern "C" JNIEXPORT void JNICALL

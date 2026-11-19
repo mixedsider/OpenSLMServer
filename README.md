@@ -45,8 +45,9 @@ curl -fsS "$BASE_URL/v1/chat/completions" \
 ```
 
 - `GET /`는 서버 상태를, `GET /v1/models`는 현재 실행 중인 모델의 ID를 반환합니다.
-- `POST /v1/chat/completions`는 텍스트 메시지를 받아 `choices[0].message.content`에 생성 결과를 반환합니다. `model`은 생략하거나 모델 목록에서 받은 ID를 사용합니다. `max_tokens`는 앱의 최대 출력 토큰 설정 이내여야 합니다.
-- 현재 API는 단일 JSON 응답을 지원합니다. 대화 이력을 사용하려면 요청마다 앞선 메시지를 함께 보내고 마지막 메시지의 역할을 `user`로 지정합니다.
+- `POST /v1/chat/completions`는 기본으로 JSON을 반환합니다. `"stream": true`를 설정하면 SSE로 `chat.completion.chunk` 이벤트를 보내고 `[DONE]`으로 종료합니다. curl에서는 `-N`으로 스트리밍 출력을 볼 수 있습니다.
+- `model`은 생략하거나 모델 목록에서 받은 ID를 사용합니다. `max_tokens`는 1부터 앱의 최대 출력 토큰 설정 사이로 조정됩니다. 메시지의 `content`는 문자열 또는 `{"type":"text","text":"…"}` 배열을 받으며, 첫 대화 턴 앞에 `system`과 `developer` 메시지를 둘 수 있습니다.
+- 함수 정의는 `tools`로 보냅니다. 모델이 함수를 호출하면 `finish_reason`은 `tool_calls`가 되고 호출 목록은 JSON의 `message.tool_calls` 또는 SSE의 `delta.tool_calls`에 담깁니다. 클라이언트가 함수를 실행한 뒤 기존 이력과 assistant의 호출 메시지, 각 호출 ID에 대응하는 `tool_call_id`가 담긴 `tool` 메시지를 다음 요청에 보냅니다. 도구 사용이 가능한 SSE 요청은 모델 출력을 모아 함수 호출인지 판별한 뒤 전송합니다.
 
 ## 소스에서 빌드
 

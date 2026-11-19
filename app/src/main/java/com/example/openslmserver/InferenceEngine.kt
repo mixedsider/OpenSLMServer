@@ -4,12 +4,25 @@ import android.content.Context
 import android.os.Build
 import android.util.Log
 import com.google.ai.edge.litertlm.Backend
+import com.google.ai.edge.litertlm.Content
 import com.google.ai.edge.litertlm.Contents
 import com.google.ai.edge.litertlm.ConversationConfig
 import com.google.ai.edge.litertlm.Engine
 import com.google.ai.edge.litertlm.EngineConfig
 import com.google.ai.edge.litertlm.Message as LiteMessage
+import com.google.ai.edge.litertlm.OpenApiTool
+import com.google.ai.edge.litertlm.ToolCall as LiteToolCall
+import com.google.ai.edge.litertlm.tool
+import com.google.gson.GsonBuilder
+import com.google.gson.JsonParser
 import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.trySendBlocking
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 
 internal enum class Accelerator(val label: String) {
     AUTO("자동"), CPU("CPU"), GPU("GPU"), NPU("NPU")
@@ -27,7 +40,12 @@ internal interface InferenceEngine : AutoCloseable {
     val name: String
     val accelerator: Accelerator
 
-    fun generate(messages: List<Message>, maxTokens: Int): String
+    suspend fun generate(
+        messages: List<Message>,
+        tools: ChatTools,
+        maxTokens: Int,
+        onText: suspend (String) -> Unit
+    ): List<ToolFunction>
 }
 
 internal object InferenceEngines {
@@ -124,16 +142,57 @@ private class LiteRtEngine(
         }
     }
 
-    override fun generate(messages: List<Message>, maxTokens: Int): String {
-        val instructions = messages.takeWhile { it.role == "system" }
-        val history = messages.drop(instructions.size).dropLast(1).map {
-            if (it.role == "assistant") LiteMessage.model(it.content) else LiteMessage.user(it.content)
+    private val gson = GsonBuilder().serializeNulls().create()
+
+    override suspend fun generate(
+        messages: List<Message>,
+        tools: ChatTools,
+        maxTokens: Int,
+        onText: suspend (String) -> Unit
+    ): List<ToolFunction> {
+        val instructions = messages.takeWhile { it.isInstruction }
+        val names = toolNames(messages)
+        val turns = groupToolResults(messages.drop(instructions.size)).map { turn ->
+            val message = turn.first()
+            when (message.role) {
+                "assistant" -> LiteMessage.model(
+                    Contents.of(message.content?.let { listOf(Content.Text(it)) }.orEmpty()),
+                    toolCalls = message.tool_calls.orEmpty().map { call ->
+                        val arguments = JsonParser.parseString(call.function.arguments).asJsonObject.asMap()
+                        LiteToolCall(call.function.name, arguments)
+                    }
+                )
+                "tool" -> LiteMessage.tool(Contents.of(turn.map {
+                    val result = toolResult(it, names)
+                    Content.ToolResponse(result.name, result.content)
+                }))
+                else -> LiteMessage.user(message.content.orEmpty())
+            }
         }
-        val systemInstruction = instructions.joinToString("\n") { it.content }
+        val systemInstruction = (instructions.mapNotNull { it.content } + listOfNotNull(tools.instruction(false)))
+            .joinToString("\n")
             .takeIf { it.isNotBlank() }?.let { Contents.of(it) }
-        val config = ConversationConfig(systemInstruction = systemInstruction, initialMessages = history)
+        val config = ConversationConfig(
+            systemInstruction = systemInstruction,
+            initialMessages = turns.dropLast(1),
+            tools = tools.functions.map { definition ->
+                tool(object : OpenApiTool {
+                    override fun getToolDescriptionJsonString() = definition.toString()
+                    override fun execute(paramsJsonString: String): String =
+                        error("Client tools are executed by the API client")
+                })
+            },
+            automaticToolCalling = false
+        )
         return engine.createConversation(config).use { conversation ->
-            conversation.sendMessage(messages.last().content, maxOutputToken = maxTokens).toString()
+            val calls = mutableListOf<ToolFunction>()
+            conversation.sendMessageAsync(turns.last(), maxOutputToken = maxTokens).collect { part ->
+                for (content in part.contents.contents.filterIsInstance<Content.Text>()) {
+                    onText(content.text)
+                }
+                calls += part.toolCalls.map { ToolFunction(it.name, gson.toJson(it.arguments)) }
+            }
+            calls
         }
     }
 
@@ -148,13 +207,64 @@ private class GgufEngine(model: LocalModel, contextTokens: Int) : InferenceEngin
         check(it != 0L) { "GGUF를 로드하지 못했습니다. 모델 호환성과 메모리를 확인하세요." }
     }
 
-    override fun generate(messages: List<Message>, maxTokens: Int): String =
-        native.completion(
-            pointer,
-            messages.map { it.role }.toTypedArray(),
-            messages.map { it.content.encodeToByteArray() }.toTypedArray(),
-            maxTokens
-        ).decodeToString()
+    override suspend fun generate(
+        messages: List<Message>,
+        tools: ChatTools,
+        maxTokens: Int,
+        onText: suspend (String) -> Unit
+    ): List<ToolFunction> {
+        val instructions = messages.takeWhile { it.isInstruction }
+        val system = (instructions.mapNotNull { it.content } + listOfNotNull(tools.instruction(true)))
+            .joinToString("\n")
+        val names = toolNames(messages)
+        val turns = groupToolResults(messages.drop(instructions.size)).map { turn ->
+            val message = turn.first()
+            when {
+                message.role == "tool" -> {
+                    val results = JsonArray(turn.map { toolResult(it, names).toJson() })
+                    Message("user", "Tool results (JSON): $results")
+                }
+                !message.tool_calls.isNullOrEmpty() -> Message(
+                    "assistant",
+                    listOfNotNull(message.content, Json.encodeToString(message.tool_calls)).joinToString("\n")
+                )
+                else -> message
+            }
+        }
+        val prompt = listOfNotNull(system.takeIf { it.isNotBlank() }?.let { Message("system", it) }) + turns
+        coroutineScope {
+            val chunks = Channel<ByteArray>(Channel.BUFFERED)
+            launch(Dispatchers.IO) {
+                try {
+                    native.streamCompletion(
+                        pointer,
+                        prompt.map { it.role }.toTypedArray(),
+                        prompt.map { it.content.orEmpty().encodeToByteArray() }.toTypedArray(),
+                        maxTokens
+                    ) { chunks.trySendBlocking(it).isSuccess }
+                } finally {
+                    chunks.close()
+                }
+            }
+            try {
+                for (chunk in chunks) onText(chunk.decodeToString())
+            } finally {
+                chunks.cancel()
+            }
+        }
+        return emptyList()
+    }
 
     override fun close() = native.releaseContext(pointer)
+}
+
+private fun groupToolResults(messages: List<Message>): List<List<Message>> = buildList {
+    var index = 0
+    while (index < messages.size) {
+        val start = index++
+        if (messages[start].role == "tool") {
+            while (index < messages.size && messages[index].role == "tool") index++
+        }
+        add(messages.subList(start, index))
+    }
 }

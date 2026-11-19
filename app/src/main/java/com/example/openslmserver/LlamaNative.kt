@@ -8,11 +8,16 @@ class LlamaNative {
     }
 
     external fun initContext(modelPath: ByteArray, contextTokens: Int): Long
-    external fun completion(
+    external fun streamCompletion(
         contextPtr: Long,
         roles: Array<String>,
         messages: Array<ByteArray>,
-        maxTokens: Int
-    ): ByteArray
+        maxTokens: Int,
+        output: TokenOutput
+    )
     external fun releaseContext(contextPtr: Long)
+
+    fun interface TokenOutput {
+        fun onBytes(bytes: ByteArray): Boolean
+    }
 }
