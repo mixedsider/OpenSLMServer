@@ -38,6 +38,7 @@ internal class ServerService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var startup: Job? = null
     private var server: KtorServer? = null
+    private var serverLog: ServerLog? = null
     private var stopping = false
     private var destroyed = false
 
@@ -68,19 +69,24 @@ internal class ServerService : Service() {
                     contextTokens = intent.getIntExtra("contextTokens", 1024),
                     outputTokens = intent.getIntExtra("outputTokens", 256),
                     accelerator = Accelerator.valueOf(requireNotNull(intent.getStringExtra("accelerator"))),
-                    allowLan = intent.getBooleanExtra("allowLan", false)
+                    allowLan = intent.getBooleanExtra("allowLan", false),
+                    logEnabled = intent.getBooleanExtra("logEnabled", false)
                 )
+                val log = if (settings.logEnabled) ServerLog(noBackupFilesDir) else null
+                serverLog = log
                 val (activeServer, backend, endpoint) = withContext(Dispatchers.IO) {
+                    log?.record("server.starting port=${settings.port} lan=${settings.allowLan}")
                     val model = checkNotNull(ModelManager(this@ServerService).listModels().firstOrNull {
                         it.file.name == intent.getStringExtra("model")
                     }) { getString(R.string.model_not_imported) }
                     val inference = InferenceEngines.load(this@ServerService, model, settings)
                     var candidate: KtorServer? = null
                     try {
-                        candidate = KtorServer(model, inference, settings)
+                        candidate = KtorServer(model, inference, settings, log)
                         candidate.start()
                         val host = if (settings.allowLan) localAddress() ?: "127.0.0.1" else "127.0.0.1"
                         val backend = "${model.label} · ${inference.name} · ${inference.accelerator.label}"
+                        log?.record("server.started format=${model.format} accelerator=${inference.accelerator}")
                         Triple(candidate, backend, "http://$host:${settings.port}/v1")
                     } catch (error: Throwable) {
                         if (candidate == null) runCatching { inference.close() } else runCatching { candidate.stop() }
@@ -95,11 +101,16 @@ internal class ServerService : Service() {
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
-                shutdown(errorMessage(this@ServerService, error))
+                shutdownAfterStartError(error)
             } catch (error: LinkageError) {
-                shutdown(errorMessage(this@ServerService, error))
+                shutdownAfterStartError(error)
             }
         }
+    }
+
+    private suspend fun shutdownAfterStartError(error: Throwable) {
+        withContext(Dispatchers.IO) { serverLog?.record("server.start_failed error=${error.javaClass.simpleName}") }
+        shutdown(errorMessage(this, error))
     }
 
     private fun shutdown(message: String = getString(R.string.server_stopped)) {
@@ -110,7 +121,15 @@ internal class ServerService : Service() {
             var result = message
             try {
                 startup?.join()
-                withContext(Dispatchers.IO) { server?.stop() }
+                withContext(Dispatchers.IO) {
+                    try {
+                        server?.stop()
+                        serverLog?.record("server.stopped")
+                    } catch (error: Exception) {
+                        serverLog?.record("server.stop_failed error=${error.javaClass.simpleName}")
+                        throw error
+                    }
+                }
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
@@ -201,6 +220,7 @@ internal class ServerService : Service() {
                         .putExtra("outputTokens", settings.outputTokens)
                         .putExtra("accelerator", settings.accelerator.name)
                         .putExtra("allowLan", settings.allowLan)
+                        .putExtra("logEnabled", settings.logEnabled)
                 )
             } catch (error: Exception) {
                 mutableStatus.value = ServerStatus(message = errorMessage(context, error))

@@ -214,6 +214,26 @@
                     android:layout_marginTop="8dp"
                     android:minHeight="48dp"
                     android:text="@string/allow_lan" />
+
+                <com.google.android.material.materialswitch.MaterialSwitch
+                    android:id="@+id/log_enabled"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:minHeight="48dp"
+                    android:text="@string/log_enabled" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/save_log"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/save_log" />
+
+                <TextView
+                    android:id="@+id/log_message"
+                    style="@style/Widget.OpenSLM.SupportingText"
+                    android:accessibilityLiveRegion="polite"
+                    android:visibility="gone" />
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 

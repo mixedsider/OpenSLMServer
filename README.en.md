@@ -15,6 +15,8 @@ To connect from a PC, put both devices on the same network and enable **같은 �
 
 The server keeps running when you leave the app. With notifications enabled, a server icon appears in the status bar. Open the notification shade to see the address or stop the server.
 
+Enable server logging before starting the server to record lifecycle events, request routes, HTTP status codes, and processing times on the device. Use the save button to export recent logs. The log excludes chat content and authentication data.
+
 ## Models and accelerators
 
 To switch models, stop the server, then import a new model or select one you previously imported. Start the server again to load the selected model.

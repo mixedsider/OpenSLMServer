@@ -34,7 +34,8 @@ internal data class ServerSettings(
     val contextTokens: Int,
     val outputTokens: Int,
     val accelerator: Accelerator,
-    val allowLan: Boolean
+    val allowLan: Boolean,
+    val logEnabled: Boolean = false
 )
 
 internal interface InferenceEngine : AutoCloseable {

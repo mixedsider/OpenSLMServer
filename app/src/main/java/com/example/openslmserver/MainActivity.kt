@@ -3,6 +3,7 @@ package com.example.openslmserver
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -34,6 +35,9 @@ class MainActivity : AppCompatActivity() {
     private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
         startServer()
     }
+    private val saveLog = registerForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
+        if (uri != null) viewModel.exportServerLogs(uri)
+    }
 
     private val openModel = registerForActivityResult(object : ActivityResultContracts.OpenDocument() {
         override fun createIntent(context: android.content.Context, input: Array<String>): Intent =
@@ -54,6 +58,8 @@ class MainActivity : AppCompatActivity() {
         setContentView(binding.root)
         supportActionBar?.hide()
         WindowCompat.setDecorFitsSystemWindows(window, false)
+        WindowCompat.getInsetsController(window, binding.root).isAppearanceLightStatusBars =
+            resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK != Configuration.UI_MODE_NIGHT_YES
         ViewCompat.setOnApplyWindowInsetsListener(binding.root) { view, insets ->
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
             view.updatePadding(left = bars.left, top = bars.top, right = bars.right, bottom = bars.bottom)
@@ -66,6 +72,7 @@ class MainActivity : AppCompatActivity() {
         binding.contextTokens.setText(preferences.getInt("contextTokens", 1024).toString())
         binding.outputTokens.setText(preferences.getInt("outputTokens", 256).toString())
         binding.allowLan.isChecked = preferences.getBoolean("allowLan", true)
+        binding.logEnabled.isChecked = preferences.getBoolean("logEnabled", false)
         selectedAccelerator = Accelerator.entries.find { it.name == preferences.getString("accelerator", "CPU") }
 
         binding.importModel.setOnClickListener { openModel.launch(arrayOf("*/*")) }
@@ -87,6 +94,7 @@ class MainActivity : AppCompatActivity() {
         binding.serverAction.setOnClickListener {
             if (viewModel.state.value.running) viewModel.stop() else startServer()
         }
+        binding.saveLog.setOnClickListener { saveLog.launch("OpenSLMServer.log") }
 
         lifecycleScope.launch {
             viewModel.state.collect { render(it) }
@@ -130,6 +138,10 @@ class MainActivity : AppCompatActivity() {
         outputLayout.isEnabled = canEdit
         portLayout.isEnabled = canEdit
         allowLan.isEnabled = canEdit
+        logEnabled.isEnabled = canEdit
+        saveLog.isEnabled = !state.exportingLog && viewModel.hasServerLogs()
+        logMessage.isVisible = state.logMessage.isNotEmpty()
+        logMessage.text = state.logMessage
         downloadModel.isEnabled = canEdit
         importModel.isEnabled = canEdit
 
@@ -173,7 +185,9 @@ class MainActivity : AppCompatActivity() {
             notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
             return
         }
-        viewModel.start(model, ServerSettings(port, context, output, accelerator, binding.allowLan.isChecked))
+        viewModel.start(model, ServerSettings(
+            port, context, output, accelerator, binding.allowLan.isChecked, logEnabled = binding.logEnabled.isChecked
+        ))
     }
 
     private fun AutoCompleteTextView.setOptions(labels: List<String>) {

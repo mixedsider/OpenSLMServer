@@ -3,6 +3,7 @@ package com.example.openslmserver
 import android.app.Application
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
+import java.io.IOException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -22,7 +23,9 @@ internal data class DashboardState(
     val busy: Boolean = false,
     val endpoint: String? = null,
     val message: String = "",
-    val progress: Int? = null
+    val progress: Int? = null,
+    val exportingLog: Boolean = false,
+    val logMessage: String = ""
 ) {
     val running: Boolean get() = endpoint != null
 }
@@ -30,6 +33,7 @@ internal data class DashboardState(
 internal class ServerViewModel(application: Application) : AndroidViewModel(application) {
     private val context = application
     private val modelManager = ModelManager(application)
+    private val serverLog = ServerLog(application.noBackupFilesDir)
     val preferences = application.getSharedPreferences("server-settings", Application.MODE_PRIVATE)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val mutableState = MutableStateFlow(
@@ -91,6 +95,7 @@ internal class ServerViewModel(application: Application) : AndroidViewModel(appl
             .putInt("outputTokens", settings.outputTokens)
             .putString("accelerator", settings.accelerator.name)
             .putBoolean("allowLan", settings.allowLan)
+            .putBoolean("logEnabled", settings.logEnabled)
             .apply()
         mutableState.update { it.copy(message = "") }
         ServerService.start(context, model, settings)
@@ -98,6 +103,29 @@ internal class ServerViewModel(application: Application) : AndroidViewModel(appl
 
     fun stop() {
         if (state.value.running && !state.value.busy) ServerService.stop(context)
+    }
+
+    fun hasServerLogs() = serverLog.hasEntries()
+
+    fun exportServerLogs(destination: Uri) {
+        if (mutableState.value.exportingLog) return
+        mutableState.update { it.copy(exportingLog = true, logMessage = "") }
+        scope.launch {
+            val message = try {
+                withContext(Dispatchers.IO) {
+                    val contents = serverLog.snapshot()
+                    val stream = context.contentResolver.openOutputStream(destination, "wt")
+                        ?: throw IOException("Log destination unavailable")
+                    stream.use { it.write(contents) }
+                }
+                R.string.log_saved
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                R.string.log_save_failed
+            }
+            mutableState.update { it.copy(exportingLog = false, logMessage = context.getString(message)) }
+        }
     }
 
     override fun onCleared() {

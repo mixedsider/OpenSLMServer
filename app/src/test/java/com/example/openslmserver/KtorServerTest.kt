@@ -14,10 +14,16 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 
 class KtorServerTest {
+    @get:Rule
+    val tempFolder = TemporaryFolder()
+
     @Test
     fun returnsTextFromTheSelectedInferenceEngine() = withServer { endpoint ->
         post(endpoint, """{
@@ -128,12 +134,45 @@ class KtorServerTest {
         }
     }
 
+    @Test
+    fun recordsRequestOutcomesWithoutSavingChatOrQueryData() {
+        val log = ServerLog(tempFolder.newFolder())
+        val body = """{"messages":[{"role":"user","content":"private prompt"}]}"""
+        withServer(serverLog = log) { endpoint ->
+            post(URI("$endpoint?token=private-query"), body) {
+                assertEquals(200, it.responseCode)
+                it.body()
+            }
+            post(endpoint, """{"messages":[]}""") { assertEquals(400, it.responseCode) }
+        }
+        val saved = log.snapshot().decodeToString()
+        assertTrue(saved.contains("POST /v1/chat/completions status=200 duration_ms="))
+        assertTrue(saved.contains("POST /v1/chat/completions status=400 duration_ms="))
+        assertFalse(saved.contains("private prompt"))
+        assertFalse(saved.contains("private-query"))
+    }
+
+    @Test
+    fun leavesSavedLogsUntouchedWhenLoggingIsOff() {
+        val log = ServerLog(tempFolder.newFolder())
+        log.record("earlier session")
+        val saved = log.snapshot().decodeToString()
+        withServer(serverLog = log, logEnabled = false) { endpoint ->
+            post(endpoint, """{"messages":[{"role":"user","content":"Hello"}]}""") {
+                assertEquals(200, it.responseCode)
+            }
+        }
+        assertEquals(saved, log.snapshot().decodeToString())
+    }
+
     private fun withServer(
         generate: suspend (List<Message>, Int, suspend (String) -> Unit) -> List<ToolFunction> =
             { messages, maxTokens, onText ->
                 onText("${messages.last().content} (${messages.size} messages, $maxTokens tokens)")
                 emptyList()
             },
+        serverLog: ServerLog? = null,
+        logEnabled: Boolean = serverLog != null,
         test: (URI) -> Unit
     ) {
         val port = ServerSocket(0).use { it.localPort }
@@ -154,7 +193,8 @@ class KtorServerTest {
             }
         }
         val model = LocalModel(File(ModelManager.DEFAULT_FILE), ModelFormat.LITERT)
-        val server = KtorServer(model, engine, ServerSettings(port, 1024, 256, Accelerator.CPU, allowLan = false))
+        val settings = ServerSettings(port, 1024, 256, Accelerator.CPU, allowLan = false, logEnabled = logEnabled)
+        val server = KtorServer(model, engine, settings, serverLog)
         server.start()
         try {
             test(URI("http://127.0.0.1:$port/v1/chat/completions"))

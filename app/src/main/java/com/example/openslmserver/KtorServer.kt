@@ -6,12 +6,15 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.withCharset
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.ApplicationCall
+import io.ktor.server.application.ApplicationCallPipeline
 import io.ktor.server.application.call
 import io.ktor.server.application.install
 import io.ktor.server.application.log
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.server.request.httpMethod
+import io.ktor.server.request.path
 import io.ktor.server.request.receive
 import io.ktor.server.response.respond
 import io.ktor.server.response.respondText
@@ -23,6 +26,7 @@ import java.io.IOException
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -34,7 +38,8 @@ import kotlinx.serialization.json.putJsonObject
 internal class KtorServer(
     private val model: LocalModel,
     private val inference: InferenceEngine,
-    private val settings: ServerSettings
+    private val settings: ServerSettings,
+    private val serverLog: ServerLog? = null
 ) {
     private val queue = QueueManager()
     private val responseJson = Json {
@@ -52,6 +57,25 @@ internal class KtorServer(
     ) {
         install(ContentNegotiation) {
             json(responseJson)
+        }
+        if (settings.logEnabled && serverLog != null) {
+            intercept(ApplicationCallPipeline.Monitoring) {
+                val started = System.nanoTime()
+                val method = call.request.httpMethod.value.takeIf { it == "GET" || it == "POST" } ?: "OTHER"
+                val path = when (val requested = call.request.path()) {
+                    "/", "/v1/models", "/v1/chat/completions" -> requested
+                    else -> "(unmatched)"
+                }
+                try {
+                    proceed()
+                } finally {
+                    val status = call.response.status()?.value?.toString() ?: "-"
+                    val elapsed = (System.nanoTime() - started) / 1_000_000
+                    withContext(NonCancellable + Dispatchers.IO) {
+                        serverLog.record("http.request $method $path status=$status duration_ms=$elapsed")
+                    }
+                }
+            }
         }
         routing {
             get("/") { call.respondText("OpenSLM Server is running!") }
