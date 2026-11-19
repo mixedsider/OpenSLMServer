@@ -26,4 +26,10 @@
     <string name="status_running">서버 실행 중</string>
     <string name="status_stopped">서버 중지됨</string>
     <string name="status_idle">모델과 설정을 선택하고 서버를 시작하세요.</string>
+    <string name="server_loading">모델을 로드하는 중…</string>
+    <string name="server_stopping">서버를 중지하는 중…</string>
+    <string name="server_stopped">서버가 중지되었습니다.</string>
+    <string name="server_failure">서버 실행에 실패했습니다.</string>
+    <string name="notification_channel">서버 상태</string>
+    <string name="notification_server_running">OpenSLMServer 실행 중</string>
 </resources>

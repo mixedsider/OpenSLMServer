@@ -2,16 +2,16 @@ package com.example.openslmserver
 
 import android.app.Application
 import android.net.Uri
-import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -20,10 +20,12 @@ internal data class DashboardState(
     val models: List<LocalModel>,
     val selectedFile: String,
     val busy: Boolean = false,
-    val running: Boolean = false,
+    val endpoint: String? = null,
     val message: String = "",
     val progress: Int? = null
-)
+) {
+    val running: Boolean get() = endpoint != null
+}
 
 internal class ServerViewModel(application: Application) : AndroidViewModel(application) {
     private val context = application
@@ -36,20 +38,30 @@ internal class ServerViewModel(application: Application) : AndroidViewModel(appl
             selectedFile = preferences.getString("model", null) ?: ModelManager.DEFAULT_FILE
         )
     )
-    val state = mutableState.asStateFlow()
-    private var operation: Job? = null
-    private var server: KtorServer? = null
+    val state = combine(mutableState, ServerService.status, ::withServerStatus)
+        .stateIn(scope, SharingStarted.Eagerly, withServerStatus(mutableState.value, ServerService.status.value))
+
+    private fun withServerStatus(dashboard: DashboardState, server: ServerStatus) = dashboard.copy(
+        busy = dashboard.busy || server.busy,
+        endpoint = server.endpoint,
+        message = server.message.ifBlank { dashboard.message }
+    )
+
+    private fun canEdit() = !mutableState.value.busy &&
+        !ServerService.status.value.busy && ServerService.status.value.endpoint == null
 
     fun selectModel(fileName: String) {
-        if (state.value.busy || state.value.running) return
+        if (!canEdit()) return
+        ServerService.clearMessage()
         preferences.edit().putString("model", fileName).apply()
         mutableState.update { it.copy(selectedFile = fileName, message = "") }
     }
 
     fun importModel(uri: Uri) {
-        if (state.value.busy || state.value.running) return
+        if (!canEdit()) return
+        ServerService.clearMessage()
         mutableState.update { it.copy(busy = true, message = "모델을 가져오는 중…") }
-        operation = scope.launch {
+        scope.launch {
             try {
                 val (model, models) = withContext(Dispatchers.IO) {
                     val imported = modelManager.importModel(uri) { percent ->
@@ -72,7 +84,7 @@ internal class ServerViewModel(application: Application) : AndroidViewModel(appl
     }
 
     fun start(model: LocalModel, settings: ServerSettings) {
-        if (state.value.busy || state.value.running) return
+        if (!canEdit()) return
         preferences.edit()
             .putInt("port", settings.port)
             .putInt("contextTokens", settings.contextTokens)
@@ -80,71 +92,15 @@ internal class ServerViewModel(application: Application) : AndroidViewModel(appl
             .putString("accelerator", settings.accelerator.name)
             .putBoolean("allowLan", settings.allowLan)
             .apply()
-        mutableState.update { it.copy(busy = true, message = "모델을 로드하는 중…") }
-        operation = scope.launch {
-            try {
-                val backend = withContext(Dispatchers.IO) {
-                    val inference = InferenceEngines.load(context, model, settings)
-                    var candidate: KtorServer? = null
-                    try {
-                        candidate = KtorServer(model, inference, settings)
-                        candidate.start()
-                        server = candidate
-                        "${inference.name} · ${inference.accelerator.label}"
-                    } catch (error: Throwable) {
-                        if (candidate == null) runCatching { inference.close() } else runCatching { candidate.stop() }
-                        throw error
-                    }
-                }
-                mutableState.update { it.copy(running = true, message = "${model.label} · $backend") }
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: Exception) {
-                showServerError(error)
-            } catch (error: LinkageError) {
-                showServerError(error)
-            } finally {
-                mutableState.update { it.copy(busy = false) }
-            }
-        }
+        mutableState.update { it.copy(message = "") }
+        ServerService.start(context, model, settings)
     }
 
     fun stop() {
-        if (!state.value.running || state.value.busy) return
-        mutableState.update { it.copy(busy = true, message = "서버를 중지하는 중…") }
-        operation = scope.launch {
-            try {
-                withContext(Dispatchers.IO) { closeServer() }
-                mutableState.update { it.copy(message = "서버가 중지되었습니다.") }
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: Exception) {
-                showServerError(error)
-            } finally {
-                mutableState.update { it.copy(busy = false, running = false) }
-            }
-        }
-    }
-
-    private fun showServerError(error: Throwable) {
-        Log.w("OpenSLM", "Server operation failed", error)
-        mutableState.update { it.copy(message = error.localizedMessage ?: "서버 실행에 실패했습니다.") }
-    }
-
-    private suspend fun closeServer() {
-        val current = server ?: return
-        server = null
-        current.stop()
+        if (state.value.running && !state.value.busy) ServerService.stop(context)
     }
 
     override fun onCleared() {
-        scope.launch {
-            try {
-                operation?.join()
-                withContext(Dispatchers.IO) { closeServer() }
-            } finally {
-                scope.cancel()
-            }
-        }
+        scope.cancel()
     }
 }

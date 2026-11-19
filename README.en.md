@@ -13,6 +13,8 @@ OpenSLMServer runs an LLM on an Android phone and serves generated text over HTT
 
 To connect from a PC, put both devices on the same network and enable **같은 네트워크의 기기에서 접속 허용** (Allow access from devices on the same network). This setting is on by default and the server serves HTTP without authentication. Turn it off to bind the server to `127.0.0.1` for use on the phone only.
 
+The server keeps running when you leave the app. With notifications enabled, a server icon appears in the status bar. Open the notification shade to see the address or stop the server.
+
 ## Models and accelerators
 
 To switch models, stop the server, then import a new model or select one you previously imported. Start the server again to load the selected model.

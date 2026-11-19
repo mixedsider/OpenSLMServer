@@ -1,6 +1,8 @@
 package com.example.openslmserver
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -9,6 +11,7 @@ import android.widget.ArrayAdapter
 import android.widget.AutoCompleteTextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowCompat
@@ -17,8 +20,6 @@ import androidx.core.view.updatePadding
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
 import com.example.openslmserver.databinding.ActivityMainBinding
-import java.net.Inet4Address
-import java.net.NetworkInterface
 import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity() {
@@ -29,6 +30,10 @@ class MainActivity : AppCompatActivity() {
     private var renderedFile: String? = null
     private var accelerators: List<Accelerator> = emptyList()
     private var selectedAccelerator: Accelerator? = null
+
+    private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
+        startServer()
+    }
 
     private val openModel = registerForActivityResult(object : ActivityResultContracts.OpenDocument() {
         override fun createIntent(context: android.content.Context, input: Array<String>): Intent =
@@ -143,10 +148,7 @@ class MainActivity : AppCompatActivity() {
         operationProgress.isIndeterminate = state.progress == null
         state.progress?.let { operationProgress.setProgressCompat(it, true) }
         endpoint.isVisible = state.running
-        if (state.running) {
-            val host = if (allowLan.isChecked) localAddress() ?: "127.0.0.1" else "127.0.0.1"
-            endpoint.text = "http://$host:${port.text}/v1"
-        }
+        endpoint.text = state.endpoint.orEmpty()
     }
 
     private fun startServer() {
@@ -163,19 +165,18 @@ class MainActivity : AppCompatActivity() {
         if (port == null || context == null || output == null ||
             binding.portLayout.error != null || binding.contextLayout.error != null || binding.outputLayout.error != null
         ) return
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED &&
+            !viewModel.preferences.getBoolean("notificationPermissionRequested", false)
+        ) {
+            viewModel.preferences.edit().putBoolean("notificationPermissionRequested", true).apply()
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+            return
+        }
         viewModel.start(model, ServerSettings(port, context, output, accelerator, binding.allowLan.isChecked))
     }
 
     private fun AutoCompleteTextView.setOptions(labels: List<String>) {
         setAdapter(ArrayAdapter(this@MainActivity, android.R.layout.simple_dropdown_item_1line, labels))
     }
-
-    private fun localAddress(): String? = runCatching {
-        NetworkInterface.getNetworkInterfaces()?.toList().orEmpty()
-            .sortedBy { !it.name.startsWith("wlan") }
-            .asSequence()
-            .flatMap { it.inetAddresses.toList().asSequence() }
-            .filterIsInstance<Inet4Address>()
-            .firstOrNull { it.isSiteLocalAddress }?.hostAddress
-    }.getOrNull()
 }
