@@ -20,6 +20,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.trySendBlocking
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -186,12 +187,15 @@ private class LiteRtEngine(
         )
         return engine.createConversation(config).use { conversation ->
             val calls = mutableListOf<ToolFunction>()
-            conversation.sendMessageAsync(turns.last(), maxOutputToken = maxTokens).collect { part ->
-                for (content in part.contents.contents.filterIsInstance<Content.Text>()) {
-                    onText(content.text)
+            // LiteRT-LM uses trySend in its callback. Retain this token-limited output if the client is slow.
+            conversation.sendMessageAsync(turns.last(), maxOutputToken = maxTokens)
+                .buffer(Channel.UNLIMITED)
+                .collect { part ->
+                    for (content in part.contents.contents.filterIsInstance<Content.Text>()) {
+                        onText(content.text)
+                    }
+                    calls += part.toolCalls.map { ToolFunction(it.name, gson.toJson(it.arguments)) }
                 }
-                calls += part.toolCalls.map { ToolFunction(it.name, gson.toJson(it.arguments)) }
-            }
             calls
         }
     }
