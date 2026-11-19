@@ -27,11 +27,18 @@
 ## GitHub Actions CI/CD
 
 - `main` 대상 PR, `main` 푸시, 수동 실행에서 단위 테스트와 디버그 APK 빌드를 수행한다. 성공한 실행의 **Artifacts**에서 `android-debug-apk`를 다운로드한다. 단위 테스트 XML도 별도 아티팩트로 보관한다.
-- 배포할 커밋에 `v0.1.0` 같은 태그를 붙여 푸시하면 동일한 검증을 거친 APK가 **Releases**의 프리릴리스에 게시된다.
+- `app/build.gradle.kts`의 `versionCode`를 올리고 `versionName`을 배포 버전으로 설정한다. 커밋을 푸시한 뒤 앱 버전과 일치하는 태그를 푸시하면 Actions에서 릴리즈 APK를 빌드하고 버전과 정렬을 검증한다.
 
   ```bash
-  git tag v0.1.0
-  git push origin v0.1.0
+  git tag v1.0.0
+  git push origin v1.0.0
   ```
 
-- 태그마다 같은 앱 서명을 사용하려면 저장소 Actions 시크릿 `ANDROID_TEST_KEYSTORE_BASE64`에 테스트용 `debug.keystore`의 Base64 값을 등록한다. 이 키는 Android 디버그 서명의 기본 별칭 `androiddebugkey`와 기본 비밀번호 `android`를 사용해야 한다. 시크릿을 비워 두면 러너가 디버그 키를 새로 만들므로, 이전 APK와 서명이 다를 때 기존 앱을 덮어 설치할 수 없다.
+- 태그의 Actions 실행이 성공하면 `android-release-unsigned-apk` 아티팩트를 받는다. Android SDK의 `apksigner`와 `openslmserver` 별칭의 배포 키로 로컬에서 서명한다. 같은 키로 이후 버전을 서명할 수 있도록 키스토어를 안전하게 보관한다.
+
+  ```bash
+  apksigner sign --ks /path/to/release.p12 --ks-type PKCS12 --ks-key-alias openslmserver \
+    --out OpenSLMServer.apk app-release-unsigned.apk
+  apksigner verify OpenSLMServer.apk
+  gh release create v1.0.0 OpenSLMServer.apk --verify-tag --latest --generate-notes
+  ```

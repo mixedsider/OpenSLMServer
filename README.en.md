@@ -6,7 +6,7 @@ OpenSLMServer runs an LLM on an Android phone and serves generated text over HTT
 
 ## Quick start
 
-1. Install a test APK from [GitHub Releases](https://github.com/mixedsider/OpenSLMServer/releases). You can also download `android-debug-apk` from **Artifacts** in a workflow run or build the APK from source.
+1. Install the latest `OpenSLMServer.apk` from [GitHub Releases](https://github.com/mixedsider/OpenSLMServer/releases). For a development build, download `android-debug-apk` from **Artifacts** in a workflow run or build the APK from source.
 2. In the app, tap **Gemma 4 E2B 다운로드** (Download Gemma 4 E2B) to get the default model. The file is about 2.59 GB. [Default model file](https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/blob/main/gemma-4-E2B-it.litertlm)
 3. Tap **다운로드 폴더에서 가져오기** (Import from Downloads) and select the file. The app copies it to internal storage, so allow additional free space equal to the size of the model file.
 4. Choose a model and accelerator, then tap **서버 시작** (Start server). Start with LiteRT-LM **CPU** for the first test on a Snapdragon 888 device. The defaults are HTTP port `8080`, a `1024`-token context, and a `256`-token output limit.
@@ -16,6 +16,8 @@ To connect from a PC, put both devices on the same network and enable **같은 �
 ## Models and accelerators
 
 To switch models, stop the server, then import a new model or select one you previously imported. Start the server again to load the selected model.
+
+You can set the context size manually. GGUF uses the lower of the requested size and the context size recorded in the model metadata. LiteRT-LM on NPU uses the model's context setting.
 
 | Model file | Inference engine | Accelerator |
 | --- | --- | --- |
@@ -63,9 +65,9 @@ For an existing checkout, run `git submodule update --init --recursive` to fetch
 
 ## CI/CD
 
-The [Android CI/CD workflow](.github/workflows/android.yml) runs unit tests, builds the APK, and verifies its signature for pull requests to `main`, pushes to `main`, and manual runs. Push a version tag such as `v0.1.0` to publish the verified debug APK as a GitHub prerelease. See the [CI/CD notes (Korean)](plan.md#github-actions-cicd) for the tag commands and how to reuse the same signing key across test APKs.
+The [Android CI/CD workflow](.github/workflows/android.yml) runs unit tests and builds and verifies the debug APK for pull requests to `main`, pushes to `main`, and manual runs. A version tag such as `v1.0.0` that matches the app version builds and verifies the release APK. The maintainer signs that APK locally and publishes it to GitHub Releases. [CI/CD notes (Korean)](plan.md#github-actions-cicd)
 
-To install a newer test APK over an existing one, sign both builds with the same key. Set the optional repository Actions secret `ANDROID_TEST_KEYSTORE_BASE64` to a Base64-encoded test keystore that uses the standard Android debug alias `androiddebugkey` and password `android`.
+To switch from a debug APK to the official APK, keep a copy of your model files and uninstall the debug app first. Uninstalling removes the app's imported models and settings.
 
 ## License
 

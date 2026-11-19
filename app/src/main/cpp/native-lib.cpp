@@ -10,6 +10,7 @@ namespace {
 struct LlamaContext {
     llama_model *model = nullptr;
     llama_context *context = nullptr;
+    int contextTokens = 0;
 
     ~LlamaContext() {
         if (context) llama_free(context);
@@ -65,8 +66,11 @@ Java_com_example_openslmserver_LlamaNative_initContext(
     holder->model = llama_model_load_from_file(path.c_str(), modelParams);
     if (!holder->model) return 0;
 
+    const int modelContext = llama_model_n_ctx_train(holder->model);
+    if (contextTokens <= 0 || modelContext <= 0) return 0;
+    holder->contextTokens = std::min(contextTokens, modelContext);
     auto contextParams = llama_context_default_params();
-    contextParams.n_ctx = contextTokens;
+    contextParams.n_ctx = holder->contextTokens;
     contextParams.n_batch = 256;
     contextParams.n_threads = 4;
     contextParams.n_threads_batch = 4;
@@ -114,7 +118,7 @@ Java_com_example_openslmserver_LlamaNative_streamCompletion(
 
     const int needed = llama_tokenize(vocab, prompt.data(), prompt.size(), nullptr, 0, true, chatTemplate != nullptr);
     const int inputTokens = -needed;
-    if (inputTokens <= 0 || inputTokens >= static_cast<int>(llama_n_ctx(context))) {
+    if (inputTokens <= 0 || inputTokens >= holder->contextTokens) {
         return fail(env, "Prompt does not fit in the context window", "java/lang/IllegalArgumentException");
     }
     std::vector<llama_token> tokens(inputTokens);
@@ -137,7 +141,7 @@ Java_com_example_openslmserver_LlamaNative_streamCompletion(
     if (!onBytes) return;
     std::string pending;
     std::vector<char> piece(256);
-    const int limit = std::min(maxTokens, static_cast<int>(llama_n_ctx(context)) - inputTokens);
+    const int limit = std::min(maxTokens, holder->contextTokens - inputTokens);
     for (int i = 0; i < limit; ++i) {
         auto token = llama_sampler_sample(sampler.get(), context, -1);
         if (llama_vocab_is_eog(vocab, token)) break;

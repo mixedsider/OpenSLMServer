@@ -156,7 +156,7 @@ class MainActivity : AppCompatActivity() {
         val context = if (accelerator == Accelerator.NPU) 1024 else binding.contextTokens.text.toString().toIntOrNull()
         val output = binding.outputTokens.text.toString().toIntOrNull()
         binding.portLayout.error = if (port == null || port !in 1024..65535) getString(R.string.port_range) else null
-        binding.contextLayout.error = if (context == null || context !in 512..8192) getString(R.string.context_range) else null
+        binding.contextLayout.error = if (context == null || context < 512) getString(R.string.context_range) else null
         binding.outputLayout.error = if (output == null || context == null || output !in 1 until context) {
             getString(R.string.output_range)
         } else null

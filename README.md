@@ -6,7 +6,7 @@ OpenSLMServer는 안드로이드 휴대폰에서 LLM을 실행하고, 생성 결
 
 ## 시작하기
 
-1. [GitHub Releases](https://github.com/mixedsider/OpenSLMServer/releases)의 테스트용 APK를 설치합니다. Actions 실행의 **Artifacts**에 있는 `android-debug-apk`를 사용하거나 아래 안내에 따라 직접 빌드할 수도 있습니다.
+1. [GitHub Releases](https://github.com/mixedsider/OpenSLMServer/releases)의 최신 `OpenSLMServer.apk`를 설치합니다. 개발용 APK는 Actions 실행의 **Artifacts**에서 `android-debug-apk`를 받거나 아래 안내에 따라 직접 빌드할 수 있습니다.
 2. 앱에서 **Gemma 4 E2B 다운로드**를 눌러 기본 모델 파일을 받습니다. 파일 크기는 약 2.59GB입니다. [기본 모델 파일](https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/blob/main/gemma-4-E2B-it.litertlm)
 3. **다운로드 폴더에서 가져오기**를 눌러 받은 파일을 선택합니다. 앱 내부 저장소로 복사하므로 가져오기 전에 모델 파일 크기만큼 추가 공간이 필요합니다.
 4. 모델과 가속기를 선택하고 **서버 시작**을 누릅니다. Snapdragon 888에서 처음 시험할 때는 LiteRT-LM **CPU**로 시작합니다. 초기 설정은 HTTP 포트 `8080`, 컨텍스트 `1024`토큰, 최대 출력 `256`토큰입니다.
@@ -16,6 +16,8 @@ PC에서 요청하려면 휴대폰과 PC를 같은 네트워크에 연결하고 
 ## 모델과 가속기
 
 서버를 중지한 뒤 다른 모델 파일을 가져오거나 이미 가져온 모델을 선택합니다. 서버를 다시 시작하면 선택한 모델을 로드합니다.
+
+컨텍스트 토큰 수를 직접 설정할 수 있습니다. GGUF는 입력한 값과 모델 메타데이터의 컨텍스트 크기 중 작은 값을 적용합니다. LiteRT-LM NPU는 모델의 컨텍스트 설정을 사용합니다.
 
 | 모델 파일 | 추론 엔진 | 가속기 |
 | --- | --- | --- |
@@ -63,9 +65,9 @@ bash gradlew :app:testDebugUnitTest :app:assembleDebug
 
 ## CI/CD
 
-[Android CI/CD 워크플로](.github/workflows/android.yml)는 `main` 대상 PR, `main` 푸시, 수동 실행에서 단위 테스트와 APK 빌드·서명 검증을 수행합니다. `v0.1.0` 같은 버전 태그를 푸시하면 검증된 디버그 APK를 GitHub 프리릴리스에 게시합니다. 태그 사용 예제와 동일한 키로 테스트 APK에 서명하는 방법은 [CI/CD 사용법](plan.md#github-actions-cicd)에 있습니다.
+[Android CI/CD 워크플로](.github/workflows/android.yml)는 `main` 대상 PR, `main` 푸시, 수동 실행에서 단위 테스트와 디버그 APK 빌드·서명 검증을 수행합니다. 앱 버전과 일치하는 `v1.0.0` 형식의 태그를 푸시하면 배포용 APK를 빌드하고 검증합니다. 배포 담당자는 해당 APK를 로컬에서 서명하고 GitHub Releases에 게시합니다. [CI/CD 사용법](plan.md#github-actions-cicd)
 
-같은 휴대폰에서 이전 테스트 APK를 덮어 설치하려면 태그 빌드 간 서명 키가 같아야 합니다. 저장소의 선택적 Actions 시크릿 `ANDROID_TEST_KEYSTORE_BASE64`를 사용해 테스트 키를 재사용할 수 있습니다.
+기존 디버그 APK에서 정식 APK로 전환하려면 모델 원본을 보관한 뒤 디버그 앱을 제거해야 합니다. 앱을 제거하면 앱 내부로 가져온 모델과 설정도 삭제됩니다.
 
 ## 라이선스
 
