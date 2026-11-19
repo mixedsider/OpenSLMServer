@@ -1,138 +1,140 @@
 #include <jni.h>
+#include <algorithm>
+#include <memory>
+#include <mutex>
 #include <string>
-#include <android/log.h>
 #include <vector>
-#include <cstring>
 #include "llama.h"
 
-#define LOG_TAG "OpenSLM-Native"
-#define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
-
+namespace {
 struct LlamaContext {
-    llama_model * model = nullptr;
-    llama_context * ctx = nullptr;
+    llama_model *model = nullptr;
+    llama_context *context = nullptr;
 
     ~LlamaContext() {
-        if (ctx) llama_free(ctx);
+        if (context) llama_free(context);
         if (model) llama_model_free(model);
     }
 };
 
-extern "C" JNIEXPORT jlong JNICALL
-Java_com_example_openslmserver_LlamaNative_initContext(
-        JNIEnv* env,
-        jobject /* this */,
-        jstring model_path,
-        jboolean use_gpu) {
-
-    const char* path = env->GetStringUTFChars(model_path, nullptr);
-    LOGD("Initializing llama.cpp backend");
-
-    static bool backend_initialized = false;
-    if (!backend_initialized) {
-        llama_backend_init();
-        backend_initialized = true;
-    }
-
-    auto mparams = llama_model_default_params();
-    mparams.n_gpu_layers = use_gpu ? 99 : 0;
-    mparams.use_mmap = true; // Optimization: Enable mmap for GGUF
-
-    llama_model * model = llama_model_load_from_file(path, mparams);
-    if (!model) {
-        LOGD("Failed to load model: %s", path);
-        env->ReleaseStringUTFChars(model_path, path);
-        return 0;
-    }
-
-    auto cparams = llama_context_default_params();
-    cparams.n_ctx = 2048; // Constraint: context_window fixed to 2048 or less
-    cparams.n_threads = 4;
-
-    llama_context * ctx = llama_init_from_model(model, cparams);
-    if (!ctx) {
-        LOGD("Failed to init context from model");
-        llama_model_free(model);
-        env->ReleaseStringUTFChars(model_path, path);
-        return 0;
-    }
-
-    LlamaContext * holder = new LlamaContext();
-    holder->model = model;
-    holder->ctx = ctx;
-
-    LOGD("Context initialized successfully");
-    env->ReleaseStringUTFChars(model_path, path);
-    return reinterpret_cast<jlong>(holder);
+std::string readBytes(JNIEnv *env, jbyteArray bytes) {
+    std::string result(env->GetArrayLength(bytes), '\0');
+    env->GetByteArrayRegion(bytes, 0, result.size(), reinterpret_cast<jbyte *>(result.data()));
+    return result;
 }
 
-extern "C" JNIEXPORT jstring JNICALL
+jbyteArray fail(JNIEnv *env, const char *message, const char *type = "java/lang/IllegalStateException") {
+    env->ThrowNew(env->FindClass(type), message);
+    return nullptr;
+}
+}
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_example_openslmserver_LlamaNative_initContext(
+        JNIEnv *env, jobject, jbyteArray modelPath, jint contextTokens) {
+    static std::once_flag backend;
+    std::call_once(backend, llama_backend_init);
+
+    auto holder = std::make_unique<LlamaContext>();
+    auto modelParams = llama_model_default_params();
+    modelParams.n_gpu_layers = 0;
+    modelParams.use_mmap = true;
+    const auto path = readBytes(env, modelPath);
+    holder->model = llama_model_load_from_file(path.c_str(), modelParams);
+    if (!holder->model) return 0;
+
+    auto contextParams = llama_context_default_params();
+    contextParams.n_ctx = contextTokens;
+    contextParams.n_batch = 256;
+    contextParams.n_threads = 4;
+    contextParams.n_threads_batch = 4;
+    holder->context = llama_init_from_model(holder->model, contextParams);
+    if (!holder->context) return 0;
+    return reinterpret_cast<jlong>(holder.release());
+}
+
+extern "C" JNIEXPORT jbyteArray JNICALL
 Java_com_example_openslmserver_LlamaNative_completion(
-        JNIEnv* env,
-        jobject /* this */,
-        jlong context_ptr,
-        jstring prompt,
-        jobject callback) {
-
-    if (context_ptr == 0) return env->NewStringUTF("Error: Context not initialized");
-
-    LlamaContext * holder = reinterpret_cast<LlamaContext *>(context_ptr);
-    const char* p_str = env->GetStringUTFChars(prompt, nullptr);
-    const struct llama_vocab * vocab = llama_model_get_vocab(holder->model);
-
-    jmethodID onTokenMethod = nullptr;
-    if (callback != nullptr) {
-        jclass callbackClass = env->GetObjectClass(callback);
-        onTokenMethod = env->GetMethodID(callbackClass, "onToken", "(Ljava/lang/String;)V");
+        JNIEnv *env, jobject, jlong contextPtr, jobjectArray roles, jobjectArray messages,
+        jint maxTokens) {
+    const auto *holder = reinterpret_cast<LlamaContext *>(contextPtr);
+    if (!holder) return fail(env, "Model is not initialized");
+    auto *context = holder->context;
+    const auto *vocab = llama_model_get_vocab(holder->model);
+    const auto count = env->GetArrayLength(messages);
+    std::vector<std::string> roleText(count), messageText(count);
+    std::vector<llama_chat_message> chat;
+    for (jsize i = 0; i < count; ++i) {
+        auto role = static_cast<jstring>(env->GetObjectArrayElement(roles, i));
+        auto message = static_cast<jbyteArray>(env->GetObjectArrayElement(messages, i));
+        const char *roleChars = env->GetStringUTFChars(role, nullptr);
+        if (!roleChars) return nullptr;
+        roleText[i] = roleChars;
+        env->ReleaseStringUTFChars(role, roleChars);
+        messageText[i] = readBytes(env, message);
+        env->DeleteLocalRef(role);
+        env->DeleteLocalRef(message);
+        chat.push_back({roleText[i].c_str(), messageText[i].c_str()});
     }
 
-    // Tokenize
-    std::vector<llama_token> tokens(strlen(p_str) + 1);
-    int n_tokens = llama_tokenize(vocab, p_str, strlen(p_str), tokens.data(), tokens.size(), true, false);
-    if (n_tokens < 0) {
-        tokens.resize(-n_tokens);
-        n_tokens = llama_tokenize(vocab, p_str, strlen(p_str), tokens.data(), tokens.size(), true, false);
-    }
-    tokens.resize(n_tokens);
-
-    std::string full_response = "";
-
-    // Clear KV cache using memory API
-    llama_memory_seq_rm(llama_get_memory(holder->ctx), -1, -1, -1);
-
-    llama_batch batch = llama_batch_get_one(tokens.data(), tokens.size());
-
-    if (llama_decode(holder->ctx, batch) == 0) {
-        full_response = "OpenSLM: Message received and decoded. Stability mode active.";
-
-        if (callback != nullptr && onTokenMethod != nullptr) {
-            jstring jtoken = env->NewStringUTF(full_response.c_str());
-            env->CallVoidMethod(callback, onTokenMethod, jtoken);
-            env->DeleteLocalRef(jtoken);
+    const char *chatTemplate = llama_model_chat_template(holder->model, nullptr);
+    if (!chatTemplate && count != 1) return fail(env, "GGUF has no chat template");
+    std::string prompt = messageText.back();
+    if (chatTemplate) {
+        const auto size = llama_chat_apply_template(chatTemplate, chat.data(), chat.size(), true, nullptr, 0);
+        if (size < 0) return fail(env, "GGUF chat template is unsupported by this llama.cpp build");
+        std::vector<char> formatted(size + 1);
+        if (llama_chat_apply_template(chatTemplate, chat.data(), chat.size(), true, formatted.data(), formatted.size()) != size) {
+            return fail(env, "Could not apply GGUF chat template");
         }
-    } else {
-        full_response = "Error: llama_decode failed.";
-        LOGD("llama_decode failed");
+        prompt.assign(formatted.data(), size);
     }
 
-    env->ReleaseStringUTFChars(prompt, p_str);
-    return env->NewStringUTF(full_response.c_str());
+    const int needed = llama_tokenize(vocab, prompt.data(), prompt.size(), nullptr, 0, true, chatTemplate != nullptr);
+    const int inputTokens = -needed;
+    if (inputTokens <= 0 || inputTokens >= static_cast<int>(llama_n_ctx(context))) {
+        return fail(env, "Prompt does not fit in the context window", "java/lang/IllegalArgumentException");
+    }
+    std::vector<llama_token> tokens(inputTokens);
+    if (llama_tokenize(vocab, prompt.data(), prompt.size(), tokens.data(), tokens.size(), true, chatTemplate != nullptr) != inputTokens) {
+        return fail(env, "Could not tokenize prompt");
+    }
+
+    llama_memory_clear(llama_get_memory(context), false);
+    const int batchSize = llama_n_batch(context);
+    for (int offset = 0; offset < inputTokens; offset += batchSize) {
+        auto batch = llama_batch_get_one(tokens.data() + offset, std::min(batchSize, inputTokens - offset));
+        if (llama_decode(context, batch) != 0) return fail(env, "Could not evaluate prompt");
+    }
+
+    std::unique_ptr<llama_sampler, decltype(&llama_sampler_free)>
+            sampler(llama_sampler_init_greedy(), llama_sampler_free);
+    if (!sampler) return fail(env, "Could not create sampler");
+
+    std::string response;
+    std::vector<char> piece(256);
+    const int limit = std::min(maxTokens, static_cast<int>(llama_n_ctx(context)) - inputTokens);
+    for (int i = 0; i < limit; ++i) {
+        auto token = llama_sampler_sample(sampler.get(), context, -1);
+        if (llama_vocab_is_eog(vocab, token)) break;
+        int size = llama_token_to_piece(vocab, token, piece.data(), piece.size(), 0, false);
+        if (size < 0) {
+            piece.resize(-size);
+            size = llama_token_to_piece(vocab, token, piece.data(), piece.size(), 0, false);
+        }
+        if (size < 0) return fail(env, "Could not decode generated token");
+        response.append(piece.data(), size);
+        if (i + 1 < limit && llama_decode(context, llama_batch_get_one(&token, 1)) != 0) {
+            return fail(env, "Could not evaluate generated token");
+        }
+    }
+    auto output = env->NewByteArray(response.size());
+    if (output) env->SetByteArrayRegion(output, 0, response.size(),
+                                         reinterpret_cast<const jbyte *>(response.data()));
+    return output;
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_example_openslmserver_LlamaNative_releaseContext(
-        JNIEnv* env,
-        jobject /* this */,
-        jlong context_ptr) {
-    if (context_ptr != 0) {
-        LlamaContext * holder = reinterpret_cast<LlamaContext *>(context_ptr);
-        delete holder;
-    }
-}
-
-extern "C" JNIEXPORT jstring JNICALL
-Java_com_example_openslmserver_MainActivity_stringFromJNI(
-        JNIEnv* env,
-        jobject /* this */) {
-    return env->NewStringUTF("OpenSLM Engine (Optimized & Protected)");
+Java_com_example_openslmserver_LlamaNative_releaseContext(JNIEnv *, jobject, jlong contextPtr) {
+    delete reinterpret_cast<LlamaContext *>(contextPtr);
 }

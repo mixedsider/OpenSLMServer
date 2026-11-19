@@ -1,66 +1,46 @@
 package com.example.openslmserver
 
-import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
-import org.junit.Assert.*
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Test
 
-@OptIn(ExperimentalCoroutinesApi::class)
 class QueueManagerTest {
-
     @Test
-    fun `test sequential processing`() = runBlocking {
-        val processedItems = mutableListOf<String>()
-        val queueManager = QueueManager(
-            maxQueueSize = 5,
-            onProcess = { request ->
-                delay(100)
-                val content = request.messages.last().content
-                processedItems.add(content)
-                ChatResponse("id", "obj", 0, "model", emptyList())
+    fun processesRequestsSequentially() = runBlocking {
+        val queue = QueueManager()
+        val releaseFirst = CompletableDeferred<Unit>()
+        val first = async(start = CoroutineStart.UNDISPATCHED) {
+            queue.enqueue {
+                releaseFirst.await()
+                "first"
             }
-        )
+        }
+        val second = async(start = CoroutineStart.UNDISPATCHED) { queue.enqueue { "second" } }
+        val processedEarly = second.isCompleted
 
-        launch { queueManager.startProcessing() }
-
-        val job1 = launch { queueManager.enqueue(ChatRequest(messages = listOf(Message("user", "1")))) }
-        val job2 = launch { queueManager.enqueue(ChatRequest(messages = listOf(Message("user", "2")))) }
-
-        job1.join()
-        job2.join()
-
-        assertEquals(listOf("1", "2"), processedItems)
+        releaseFirst.complete(Unit)
+        assertEquals("first", first.await())
+        assertEquals("second", second.await())
+        assertFalse(processedEarly)
     }
 
     @Test
-    fun `test queue full rejection`() = runBlocking {
-        val queueManager = QueueManager(
-            maxQueueSize = 1,
-            onProcess = { 
-                delay(500)
-                ChatResponse("id", "obj", 0, "model", emptyList())
-            }
-        )
+    fun rejectsRequestsWhenCapacityIsFull() = runBlocking {
+        val queue = QueueManager(maxQueueSize = 1)
+        val release = CompletableDeferred<Unit>()
+        val first = async(start = CoroutineStart.UNDISPATCHED) { queue.enqueue { release.await() } }
 
-        launch { queueManager.startProcessing() }
-
-        // First request occupies the slot (and is currently "processing", but technically it's dequeued immediately when processing starts)
-        // Wait, in my implementation: enqueue increments count, then sends to channel. 
-        // startProcessing receives, then decrements count *after* processing.
-        
-        val resp1 = launch { 
-            val res = queueManager.enqueue(ChatRequest(messages = listOf(Message("user", "1"))))
-            assertNotNull(res)
+        try {
+            assertNull(queue.enqueue { "overflow" })
+        } finally {
+            release.complete(Unit)
         }
-        
-        delay(50) // ensure it's in the queue/processing
-        
-        // Second request should be rejected because currentQueueCount is 1
-        val res2 = queueManager.enqueue(ChatRequest(messages = listOf(Message("user", "2"))))
-        assertNull(res2)
-        
-        resp1.join()
+        first.await()
+        assertEquals("next", queue.enqueue { "next" })
     }
 }

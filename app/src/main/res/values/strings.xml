@@ -1,3 +1,29 @@
 <resources>
     <string name="app_name">OpenSLMServer</string>
+    <string name="model_section">모델</string>
+    <string name="model_label">실행할 모델</string>
+    <string name="default_model">Gemma 4 E2B IT</string>
+    <string name="default_model_missing">Gemma 4 E2B IT (기본 모델)</string>
+    <string name="model_not_imported">기본 모델을 다운로드한 뒤 가져오세요.</string>
+    <string name="import_model">다운로드 폴더에서 가져오기</string>
+    <string name="download_model">Gemma 4 E2B 다운로드 · 2.59 GB</string>
+    <string name="no_browser">다운로드 페이지를 열 브라우저를 찾지 못했습니다.</string>
+    <string name="inference_section">추론 설정</string>
+    <string name="accelerator_label">가속기</string>
+    <string name="npu_ready">이 기기용 Qualcomm NPU 모델 · 컨텍스트는 모델 설정 사용</string>
+    <string name="gguf_cpu">GGUF 모델은 llama.cpp CPU로 실행합니다.</string>
+    <string name="context_label">컨텍스트 토큰</string>
+    <string name="output_label">최대 출력 토큰</string>
+    <string name="context_range">512–8192 사이로 입력하세요.</string>
+    <string name="output_range">1 이상, 컨텍스트 토큰보다 작아야 합니다.</string>
+    <string name="server_section">서버 설정</string>
+    <string name="port_label">HTTP 포트</string>
+    <string name="port_range">1024–65535 사이로 입력하세요.</string>
+    <string name="allow_lan">같은 네트워크의 기기에서 접속 허용</string>
+    <string name="start_server">서버 시작</string>
+    <string name="stop_server">서버 중지</string>
+    <string name="status_working">처리 중</string>
+    <string name="status_running">서버 실행 중</string>
+    <string name="status_stopped">서버 중지됨</string>
+    <string name="status_idle">모델과 설정을 선택하고 서버를 시작하세요.</string>
 </resources>

@@ -7,8 +7,12 @@ class LlamaNative {
         }
     }
 
-    // Native methods to be implemented in C++
-    external fun initContext(modelPath: String, useGpu: Boolean): Long
-    external fun completion(contextPtr: Long, prompt: String): String
+    external fun initContext(modelPath: ByteArray, contextTokens: Int): Long
+    external fun completion(
+        contextPtr: Long,
+        roles: Array<String>,
+        messages: Array<ByteArray>,
+        maxTokens: Int
+    ): ByteArray
     external fun releaseContext(contextPtr: Long)
 }

@@ -6,7 +6,8 @@ import kotlinx.serialization.Serializable
 data class ChatRequest(
     val model: String? = null,
     val messages: List<Message>,
-    val stream: Boolean = false
+    val stream: Boolean = false,
+    val max_tokens: Int? = null
 )
 
 @Serializable
@@ -38,3 +39,15 @@ data class Usage(
     val completion_tokens: Int,
     val total_tokens: Int
 )
+
+@Serializable
+internal data class ModelList(val data: List<ModelEntry>, val `object`: String = "list")
+
+@Serializable
+internal data class ModelEntry(val id: String, val `object`: String = "model", val owned_by: String = "local")
+
+@Serializable
+internal data class ApiError(val error: ErrorMessage)
+
+@Serializable
+internal data class ErrorMessage(val message: String)
